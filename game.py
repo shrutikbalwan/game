@@ -19,12 +19,16 @@ WINDOW_HEIGHT = 720
 ROAD_WIDTH = 320
 ROAD_LEFT = (WINDOW_WIDTH - ROAD_WIDTH) // 2
 ROAD_RIGHT = ROAD_LEFT + ROAD_WIDTH
+ROAD_BORDER_WIDTH = 4
 
 LANE_COUNT = 3
 LANE_WIDTH = ROAD_WIDTH // LANE_COUNT
 
 CAR_WIDTH = 46
 CAR_HEIGHT = 82
+PLAYER_START_Y_OFFSET = 140
+PLAYER_MIN_X = ROAD_LEFT + CAR_WIDTH / 2 + ROAD_BORDER_WIDTH
+PLAYER_MAX_X = ROAD_RIGHT - CAR_WIDTH / 2 - ROAD_BORDER_WIDTH
 
 PLAYER_MAX_SPEED = 5.0
 PLAYER_ACCELERATION = 0.25
@@ -35,6 +39,9 @@ STEER_SPEED = 8.0
 TRAFFIC_MIN_SPEED = 4.0
 TRAFFIC_MAX_SPEED = 7.0
 TRAFFIC_SPAWN_MS = 900
+TARGET_FPS = 60
+BRIDGE_INPUT_MAX_AGE_SECONDS = 0.5
+SCORE_SPEED_FACTOR = 0.05
 
 WHITE = (245, 245, 245)
 GRAY_ROAD = (55, 55, 60)
@@ -84,8 +91,14 @@ def draw_road(surface: pygame.Surface, scroll_offset: float) -> None:
             pygame.draw.rect(surface, YELLOW, (x - 3, y, 6, dash_height))
             y += period
 
-    pygame.draw.rect(surface, WHITE, (ROAD_LEFT, 0, 4, WINDOW_HEIGHT))
-    pygame.draw.rect(surface, WHITE, (ROAD_RIGHT - 4, 0, 4, WINDOW_HEIGHT))
+    pygame.draw.rect(
+        surface, WHITE, (ROAD_LEFT, 0, ROAD_BORDER_WIDTH, WINDOW_HEIGHT)
+    )
+    pygame.draw.rect(
+        surface,
+        WHITE,
+        (ROAD_RIGHT - ROAD_BORDER_WIDTH, 0, ROAD_BORDER_WIDTH, WINDOW_HEIGHT),
+    )
 
 
 def draw_text(
@@ -107,6 +120,11 @@ def spawn_traffic_car() -> Car:
     return Car(x, -CAR_HEIGHT, color)
 
 
+def clamp_player_x(x_position: float) -> float:
+    """Keep the player's full collision rectangle inside the road borders."""
+    return max(PLAYER_MIN_X, min(PLAYER_MAX_X, x_position))
+
+
 def main() -> None:
     pygame.init()
     pygame.display.set_caption("Virtual Steering Wheel - Racing Game")
@@ -117,7 +135,11 @@ def main() -> None:
     pygame.time.set_timer(spawn_event, TRAFFIC_SPAWN_MS)
 
     def reset_game():
-        player = Car(WINDOW_WIDTH / 2, WINDOW_HEIGHT - 140, (40, 200, 90))
+        player = Car(
+            WINDOW_WIDTH / 2,
+            WINDOW_HEIGHT - PLAYER_START_Y_OFFSET,
+            (40, 200, 90),
+        )
         return {
             "player": player,
             "speed": 0.0,
@@ -131,7 +153,7 @@ def main() -> None:
 
     running = True
     while running:
-        clock.tick(60)
+        clock.tick(TARGET_FPS)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -151,7 +173,11 @@ def main() -> None:
 
         if not state["game_over"]:
             # Use bridge input if calibrated and recent, fall back to keyboard
-            use_bridge = bridge.calibrated and (time.time() - bridge.timestamp < 0.5)
+            bridge_age = time.time() - bridge.timestamp
+            use_bridge = (
+                bridge.calibrated
+                and 0.0 <= bridge_age < BRIDGE_INPUT_MAX_AGE_SECONDS
+            )
 
             # Accelerate / brake (W / S) -- from bridge or keyboard.
             if use_bridge:
@@ -186,14 +212,11 @@ def main() -> None:
                 if keys[pygame.K_d]:
                     player.x += STEER_SPEED
 
-            half_car = CAR_WIDTH / 2
-            player.x = max(
-                ROAD_LEFT + half_car + 4, min(ROAD_RIGHT - half_car - 4, player.x)
-            )
+            player.x = clamp_player_x(player.x)
             player.update_rect()
 
             state["scroll"] += state["speed"]
-            state["score"] += state["speed"] * 0.05
+            state["score"] += state["speed"] * SCORE_SPEED_FACTOR
 
             for car in state["traffic"]:
                 car.y += state["speed"] * 0.5 + TRAFFIC_MIN_SPEED
