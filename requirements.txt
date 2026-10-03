@@ -1,0 +1,5 @@
+# Runtime dependencies
+pygame>=2.5,<3
+opencv-python>=4.8,<5
+mediapipe>=0.10,<1
+numpy>=1.24,<3
