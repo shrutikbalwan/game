@@ -21,6 +21,8 @@ ACCELERATION_DISTANCE_RATIO = 0.35
 CALIBRATION_DURATION_SECONDS = 1.0
 CALIBRATION_STEADY_TOLERANCE_PIXELS = 25.0
 ANGLE_FILTER_SIZE = 3
+CAMERA_WARMUP_FRAMES = 10
+MAX_CONSECUTIVE_FRAME_FAILURES = 30
 
 # Each pair is (fingertip index, matching knuckle/MCP joint index).
 FINGERTIP_KNUCKLE_PAIRS = (
@@ -207,11 +209,19 @@ def open_webcam() -> cv2.VideoCapture:
 
     # Warm up the camera: the first few frames are often black/empty
     # on some Windows cameras. Discard them.
-    warm_up_frames = 10
-    for _ in range(warm_up_frames):
+    frame_ready = False
+    for _ in range(CAMERA_WARMUP_FRAMES):
         success, frame = camera.read()
-        if success and frame is not None and frame.mean() > 5.0:
+        if success and frame is not None and frame.size:
+            frame_ready = True
             break
+
+    if not frame_ready:
+        camera.release()
+        raise RuntimeError(
+            "The webcam opened but did not provide a usable frame. "
+            "Close other camera applications and reconnect the camera."
+        )
 
     return camera
 
@@ -219,7 +229,7 @@ def open_webcam() -> cv2.VideoCapture:
 def capture_frame(camera: cv2.VideoCapture) -> Optional[np.ndarray]:
     """Capture and horizontally mirror one webcam frame."""
     success, frame = camera.read()
-    if not success:
+    if not success or frame is None or not frame.size:
         return None
     return cv2.flip(frame, 1)
 
@@ -521,6 +531,7 @@ def main() -> None:
 
         previous_frame_time = time.perf_counter()
         fps = 0.0
+        consecutive_frame_failures = 0
         mp_hands = init_mediapipe()
         if mp_hands is None:
             # Fallback simulation: allow keyboard-driven synthetic gestures so
@@ -543,8 +554,13 @@ def main() -> None:
             while True:
                 frame = capture_frame(camera)
                 if frame is None:
-                    print("Error: Unable to read a frame from the webcam.")
-                    break
+                    consecutive_frame_failures += 1
+                    if consecutive_frame_failures >= MAX_CONSECUTIVE_FRAME_FAILURES:
+                        print("Error: Webcam stopped providing frames.")
+                        break
+                    cv2.waitKey(10)
+                    continue
+                consecutive_frame_failures = 0
 
                 now = time.perf_counter()
                 # handle simple keyboard controls to modify the simulated state
@@ -693,8 +709,13 @@ def main() -> None:
                 while True:
                     frame = capture_frame(camera)
                     if frame is None:
-                        print("Error: Unable to read a frame from the webcam.")
-                        break
+                        consecutive_frame_failures += 1
+                        if consecutive_frame_failures >= MAX_CONSECUTIVE_FRAME_FAILURES:
+                            print("Error: Webcam stopped providing frames.")
+                            break
+                        cv2.waitKey(10)
+                        continue
+                    consecutive_frame_failures = 0
 
                     now = time.perf_counter()
                     detection = detect_hands(frame, hands)
