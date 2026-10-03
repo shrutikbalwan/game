@@ -11,6 +11,32 @@ Press Ctrl+C in this terminal to stop everything.
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+
+PROJECT_DIR = Path(__file__).resolve().parent
+
+
+def start_component(script_name: str) -> subprocess.Popen:
+    """Start a repository script with the active Python interpreter."""
+    script_path = PROJECT_DIR / script_name
+    if not script_path.is_file():
+        raise FileNotFoundError(f"Required component is missing: {script_path}")
+    return subprocess.Popen([sys.executable, str(script_path)], cwd=PROJECT_DIR)
+
+
+def stop_process(name: str, process: subprocess.Popen) -> None:
+    """Terminate a child process and escalate if it does not exit promptly."""
+    if process.poll() is not None:
+        return
+    print(f"Terminating {name}...")
+    process.terminate()
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        print(f"Force killing {name}...")
+        process.kill()
+        process.wait()
 
 
 def main() -> None:
@@ -36,38 +62,33 @@ def main() -> None:
 
     try:
         # Start the racing game first so it's ready
-        game_proc = subprocess.Popen(
-            [sys.executable, "game.py"],
-            cwd=r"c:\Users\shrut\Downloads\New folder",
-        )
+        game_proc = start_component("game.py")
         processes.append(("game", game_proc))
 
         # Small delay so the game window opens first
         time.sleep(0.5)
 
         # Start the hand tracking
-        tracking_proc = subprocess.Popen(
-            [sys.executable, "main.py"],
-            cwd=r"c:\Users\shrut\Downloads\New folder",
-        )
+        tracking_proc = start_component("main.py")
         processes.append(("tracking", tracking_proc))
 
-        # Wait for both processes to complete
+        # If either component exits, stop the other instead of leaving an
+        # orphaned camera or game process running.
+        while all(proc.poll() is None for _, proc in processes):
+            time.sleep(0.1)
+
         for name, proc in processes:
-            proc.wait()
+            return_code = proc.poll()
+            if return_code not in (None, 0):
+                print(f"{name.capitalize()} exited with status {return_code}.")
 
     except KeyboardInterrupt:
         print("\nShutting down...")
+    except (FileNotFoundError, OSError) as error:
+        print(f"Unable to start applications: {error}")
     finally:
         for name, proc in processes:
-            if proc.poll() is None:
-                print(f"Terminating {name}...")
-                proc.terminate()
-                try:
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    print(f"Force killing {name}...")
-                    proc.kill()
+            stop_process(name, proc)
 
     print("All applications closed.")
 
