@@ -11,7 +11,7 @@ venv/
 .env
 
 # Runtime files
-_control_bridge.json
+_control_bridge.json*
 
 # Editors and operating systems
 .vscode/

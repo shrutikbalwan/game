@@ -7,10 +7,10 @@ without requiring window focus.
 import json
 import os
 import time
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 BRIDGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_control_bridge.json")
+BRIDGE_TEMP_FILE = f"{BRIDGE_FILE}.tmp"
 
 
 @dataclass
@@ -25,7 +25,11 @@ class ControlInput:
 
 
 def write_control(control: ControlInput) -> None:
-    """Write control state to the shared bridge file."""
+    """Atomically write control state to the shared bridge file.
+
+    Replacing a complete temporary file prevents the reader from observing a
+    partially written JSON document while both applications are running.
+    """
     data = {
         "steer_left": control.steer_left,
         "steer_right": control.steer_right,
@@ -35,34 +39,57 @@ def write_control(control: ControlInput) -> None:
         "timestamp": time.time(),
     }
     try:
-        with open(BRIDGE_FILE, "w") as f:
+        with open(BRIDGE_TEMP_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f)
-    except (OSError, IOError):
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(BRIDGE_TEMP_FILE, BRIDGE_FILE)
+    except OSError:
         pass  # Will retry on next frame
+
+
+def _boolean(data: dict, key: str) -> bool:
+    """Accept only real JSON booleans, not truthy strings or numbers."""
+    value = data.get(key, False)
+    return value if isinstance(value, bool) else False
+
+
+def _timestamp(data: dict) -> float:
+    """Return a finite numeric timestamp or the safe default."""
+    value = data.get("timestamp", 0.0)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return 0.0
+    value = float(value)
+    return value if value >= 0.0 else 0.0
 
 
 def read_control() -> ControlInput:
     """Read the latest control state from the shared bridge file."""
     try:
-        with open(BRIDGE_FILE, "r") as f:
+        with open(BRIDGE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            return ControlInput()
         return ControlInput(
-            steer_left=data.get("steer_left", False),
-            steer_right=data.get("steer_right", False),
-            accelerate=data.get("accelerate", False),
-            brake=data.get("brake", False),
-            calibrated=data.get("calibrated", False),
-            timestamp=data.get("timestamp", 0.0),
+            steer_left=_boolean(data, "steer_left"),
+            steer_right=_boolean(data, "steer_right"),
+            accelerate=_boolean(data, "accelerate"),
+            brake=_boolean(data, "brake"),
+            calibrated=_boolean(data, "calibrated"),
+            timestamp=_timestamp(data),
         )
-    except (OSError, IOError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return ControlInput()
 
 
 def cleanup_bridge() -> None:
     """Remove the bridge file during shutdown."""
     try:
-        if os.path.exists(BRIDGE_FILE):
-            os.remove(BRIDGE_FILE)
-    except (OSError, IOError):
+        for path in (BRIDGE_FILE, BRIDGE_TEMP_FILE):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                continue
+    except OSError:
         pass
 
